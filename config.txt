@@ -1,0 +1,2 @@
+image_dir=dataset
+n_workers=4
