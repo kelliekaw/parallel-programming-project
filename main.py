@@ -77,8 +77,13 @@ def record_result(results, result_lock, filename, text, processing_time_ms):
             "processing_time_ms": processing_time_ms,
         })
 
+# Print one message without other threads' output mixing into it
+def log(print_lock, message):
+    with print_lock:
+        print(message)
+
 # Load images from disk into the shared queue
-def loader(image_dir, n_workers, image_queue, results, result_lock):
+def loader(image_dir, n_workers, image_queue, results, result_lock, print_lock):
     # The stop markers are sent in "finally" so workers always get released,
     # even if the loader fails partway through.
     try:
@@ -93,14 +98,14 @@ def loader(image_dir, n_workers, image_queue, results, result_lock):
                     image = img.convert("RGB")  # Forces the full decode from disk
             except Exception as error:
                 # Keep the row so the CSV still accounts for every image
-                print(f"Could not load {filename}: {error}")
+                log(print_lock, f"Could not load {filename}: {error}")
                 record_result(results, result_lock, filename, "", 0.0)
                 continue
 
             # Blocks while the queue is full, which caps memory use
             image_queue.put((filename, image))
 
-        print(f"Loaded {len(filenames)} images.")
+        log(print_lock, f"Loaded {len(filenames)} images.")
     finally:
         for _ in range(n_workers):
             image_queue.put(STOP)  # Signal workers to stop after processing
@@ -117,7 +122,7 @@ def run_ocr(image):
     return text.strip()
 
 # Worker threads
-def worker(image_queue, results, result_lock, verbose=True):
+def worker(image_queue, results, result_lock, print_lock, verbose=True):
     while True:
         # Wait for an image or stop marker
         item = image_queue.get()
@@ -133,14 +138,14 @@ def worker(image_queue, results, result_lock, verbose=True):
         try:
             text = run_ocr(preprocess_image(image))
         except Exception as error:
-            print(f"Could not process {filename}: {error}")
+            log(print_lock, f"Could not process {filename}: {error}")
             text = ""
 
         processing_time_ms = (time.perf_counter() - start_time) * 1000
         record_result(results, result_lock, filename, text, processing_time_ms)
 
         if verbose:
-            print(f"Processed {filename} in {processing_time_ms:.2f} ms. Recognized text: {text}")
+            log(print_lock, f"Processed {filename} in {processing_time_ms:.2f} ms. Recognized text: {text}")
 
 # Write results to output file
 def write_csv(results):
@@ -244,19 +249,22 @@ def run_pipeline(image_dir, n_workers, verbose=True):
     image_queue = queue.Queue(maxsize=n_workers * 2)
     results = []
     result_lock = threading.Lock()
+    # The console is shared too. print() writes the text and the newline as
+    # separate steps, so without this lock two threads' lines can merge.
+    print_lock = threading.Lock()
 
     # Create OCR worker threads
     workers = [
         threading.Thread(
             target=worker,
-            args=(image_queue, results, result_lock, verbose),
+            args=(image_queue, results, result_lock, print_lock, verbose),
             name=f"OCR-Worker-{i+1}",
         )
         for i in range(n_workers)
     ]
     loader_thread = threading.Thread(
         target=loader,
-        args=(image_dir, n_workers, image_queue, results, result_lock),
+        args=(image_dir, n_workers, image_queue, results, result_lock, print_lock),
         name="Loader",
     )
 
