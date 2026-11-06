@@ -47,6 +47,13 @@ STOP = None
 
 # Read config file
 def load_config():
+    if not os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            f.write("image_dir=dataset\n")
+            f.write("n_workers=4\n")
+
+        print("config.txt not found. Created a default one.")
+    
     config = {}
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         for line in f:
